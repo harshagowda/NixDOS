@@ -1,5 +1,5 @@
 # NixDOS
-A tiny OS boots off a X86 (we tested on Intel 386) 
+A tiny OS boots off a X86 (we tested on Intel 386) we wrote this in 2002
  It’s a small disk based operating system developed for the research purpose.
  It consists of 
            “bootstrap loader”, 
