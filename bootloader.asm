@@ -19,6 +19,8 @@ start:
 
     mov [boot_drive], dl
 
+    call enable_a20
+
     mov si, boot_msg
     call print_string
 
@@ -42,6 +44,38 @@ disk_error:
     mov si, error_msg
     call print_string
     jmp $
+
+; Enable address line 20 so memory above 1 MiB is reachable.
+; Tries the fast A20 gate first, then falls back to the keyboard controller.
+enable_a20:
+    in al, 0x92
+    test al, 0x02
+    jnz .done
+    or al, 0x02
+    and al, 0xFE
+    out 0x92, al
+    in al, 0x92
+    test al, 0x02
+    jnz .done
+
+    call .wait_input_clear
+    mov al, 0xD1
+    out 0x64, al
+
+    call .wait_input_clear
+    mov al, 0xDF
+    out 0x60, al
+
+    call .wait_input_clear
+
+.done:
+    ret
+
+.wait_input_clear:
+    in al, 0x64
+    test al, 0x02
+    jnz .wait_input_clear
+    ret
 
 print_string:
     lodsb
