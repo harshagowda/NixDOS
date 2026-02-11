@@ -1,10 +1,10 @@
-#include "c:\tc\bin\draw.cpp"
-#include "c:\tc\bin\string.cpp"
-#include "c:\tc\bin\welcome.cpp"
-#include "c:\tc\bin\commands.cpp"
-#include "c:\tc\bin\dt&time.cpp"
-#include "c:\tc\bin\equip.cpp"
-#include "c:\tc\bin\editor.cpp"
+#include "DRAW.CPP"
+#include "STRING.CPP"
+#include "WELCOME.CPP"
+#include "COMMANDS.CPP"
+#include "DT&TIME.CPP"
+#include "EQUIP.CPP"
+#include "EDITOR.CPP"
 int xc=3,yc=0;          //x coordinate & y coordinate
 void help()
 {
