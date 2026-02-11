@@ -15,6 +15,14 @@ if ! command -v nasm >/dev/null 2>&1; then
   echo "Error: nasm is required." >&2
   exit 1
 fi
+if ! command -v gcc >/dev/null 2>&1; then
+  echo "Error: gcc is required to build legacy C modules." >&2
+  exit 1
+fi
+if ! command -v objcopy >/dev/null 2>&1; then
+  echo "Error: objcopy is required to convert modules to flat binaries." >&2
+  exit 1
+fi
 
 # Build shell first (bootloader needs sector count)
 nasm -f bin "$ROOT_DIR/nixdos_shell.asm" -o "$SHELL_BIN"
@@ -35,12 +43,16 @@ fi
 # Build bootloader with actual shell sector count.
 nasm -f bin -D SHELL_SECTORS="$shell_sectors" "$ROOT_DIR/bootloader.asm" -o "$BOOT_BIN"
 
-# Build command modules (1 sector each, loaded by shell from fixed sectors)
+# Build legacy command modules from C into 16-bit flat binaries.
 for module in "${MODULE_NAMES[@]}"; do
-  src="$ROOT_DIR/modules/${module}.asm"
+  src="$ROOT_DIR/modules/${module}.c"
+  obj="$BUILD_DIR/${module}.o"
   out="$BUILD_DIR/${module}.bin"
 
-  nasm -f bin "$src" -o "$out"
+  gcc -m16 -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables \
+    -nostdlib -c "$src" -o "$obj"
+  objcopy -O binary -j .text "$obj" "$out"
+
   module_size=$(stat -c%s "$out")
   if (( module_size > 512 )); then
     echo "Error: module ${module}.bin is ${module_size} bytes; max is 512." >&2
@@ -66,5 +78,5 @@ done
 
 echo "Built image: $IMAGE"
 echo "Shell size: $shell_size bytes ($shell_sectors sectors)"
-echo "Modules packed in sectors 4..13"
+echo "Legacy C modules packed in sectors 4..13"
 echo "Run VM with: ./run_vm.sh"

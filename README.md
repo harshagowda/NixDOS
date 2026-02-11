@@ -19,7 +19,7 @@ The repository now includes a NASM-based boot path where one build compiles all 
 
 - `bootloader.asm` (boot sector)
 - `nixdos_shell.asm` (main shell)
-- command modules in `modules/*.asm` (`time`, `ctime`, `date`, `cdate`, `clock`, `ccolor`, `ndedit`, `prtmsg`, `prtscr`, `equip`)
+- legacy command modules in `modules/*.c` (`time`, `ctime`, `date`, `cdate`, `clock`, `ccolor`, `ndedit`, `prtmsg`, `prtscr`, `equip`)
 
 `compile.sh` assembles all of the above and packs them into one bootable 1.44MB image.
 
@@ -55,11 +55,11 @@ Output in `build/` includes:
 ### Command behavior
 
 - `HELP`, `CLR`, `VERS`, `RBOOT`, `SDOWN` are built into `nixdos_shell.asm`.
-- `TIME`, `CTIME`, `DATE`, `CDATE`, `CLOCK`, `CCOLOR`, `NDEDIT`, `PRTMSG`, `PRTSCR`, `EQUIP` are separate module binaries.
+- `TIME`, `CTIME`, `DATE`, `CDATE`, `CLOCK`, `CCOLOR`, `NDEDIT`, `PRTMSG`, `PRTSCR`, `EQUIP` are compiled from C source into separate flat module binaries.
 - When those module commands are called, the shell reads the module sector from disk and executes it.
 
 ### Legacy source compatibility note
 
 The existing `SHELL.CPP`, `COMMANDS.CPP`, `DRAW.CPP`, `DATE.CPP`, `DT&TIME.CPP`, `EQUIP.CPP`, `EDITOR.CPP`, and related files are the original multi-module shell source tree.
 
-This NASM boot flow is a bootable assembly path for VM execution. It mirrors the same command names and now loads command modules from disk in one image build.
+This NASM boot flow is a bootable VM path that now builds command modules from C sources (flat binaries) and loads them from disk sectors at runtime.
