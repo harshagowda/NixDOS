@@ -1,0 +1,324 @@
+NixDOS Enhancement Roadmap (Detailed)
+=====================================
+
+Purpose
+-------
+This document captures concrete enhancement ideas for NixDOS so any contributor can
+continue the project with clear priorities, rationale, and implementation direction.
+
+Scope
+-----
+- Bootloader and startup reliability
+- Disk loading scalability
+- Memory usage and mode transitions
+- Hardware enablement roadmap (sound, networking, storage, etc.)
+- Tooling, documentation, and contributor workflow
+
+
+1) Immediate Reliability Enhancements (High Priority)
+=====================================================
+
+1.1 Add A20 Verification (not just enable attempts)
+---------------------------------------------------
+Current state:
+- Bootloader tries fast A20 gate (port 0x92) and KBC fallback (0x64/0x60).
+
+Enhancement:
+- Add explicit A20 verification routine using memory alias test.
+- If A20 verification fails:
+  - print explicit "A20 failed" message,
+  - halt safely instead of continuing.
+
+Why:
+- Prevent subtle memory wraparound bugs above 1 MiB.
+- Makes hardware/emulator compatibility issues visible immediately.
+
+Implementation hints:
+- Save bytes at low memory location and corresponding 1 MiB+ mirrored address.
+- Compare behavior with A20 on/off expectation.
+- Keep routine compact to fit boot sector constraints.
+
+
+1.2 Add Disk Read Retry Logic
+-----------------------------
+Current state:
+- One INT 13h read attempt; failure jumps to generic error.
+
+Enhancement:
+- Retry disk reads 3 times before fail.
+- Optionally reset disk system (INT 13h AH=00) between retries.
+- Print an error code/retry count for diagnostics.
+
+Why:
+- BIOS floppy/virtual drives may have intermittent read errors.
+- Boot robustness improves significantly with minimal complexity.
+
+
+1.3 Improve Boot Diagnostics
+----------------------------
+Enhancement:
+- Add short status messages in bootloader:
+  - "A20 OK"
+  - "Disk read retry X"
+  - "Jumping to shell"
+- Keep messages short and optional (size guard macros).
+
+Why:
+- Faster debugging without external tooling.
+
+
+2) Loader Scalability Enhancements (High Priority)
+==================================================
+
+2.1 Move from single-stage 512B logic to Stage-2 loader
+--------------------------------------------------------
+Enhancement:
+- Keep sector-1 minimal: CPU init + load stage-2 loader + jump.
+- Put advanced logic in stage-2:
+  - robust disk loading
+  - layout parsing
+  - richer diagnostics
+  - memory probing groundwork
+
+Why:
+- 512-byte boot sector space is very limited.
+- Stage-2 enables cleaner architecture and easier future growth.
+
+
+2.2 Replace CHS assumptions with LBA-aware reads
+------------------------------------------------
+Current state:
+- Build enforces shell <= 18 sectors due to one-track CHS assumptions.
+
+Enhancement:
+- Use INT 13h Extensions (AH=42h) if available.
+- Fall back to CHS when extensions unavailable.
+- Remove hard 18-sector cap in build flow once loader supports larger reads.
+
+Why:
+- Supports larger shell/kernel payloads.
+- Better compatibility with modern virtual disks.
+
+
+2.3 Introduce an image layout descriptor
+----------------------------------------
+Enhancement:
+- Store metadata block in disk image (offsets, sizes, checksum).
+- Loader reads descriptor first, then loads modules accordingly.
+
+Why:
+- Decouples build layout from hardcoded loader constants.
+- Simplifies adding multiple modules later.
+
+
+3) Memory and CPU Roadmap (Medium/High Priority)
+=================================================
+
+3.1 Memory map detection
+------------------------
+Enhancement:
+- Query BIOS E820 memory map in stage-2.
+- Print/record usable ranges.
+
+Why:
+- Real hardware has varying memory layouts.
+- Needed for safe allocator/paging plans.
+
+
+3.2 Real-mode -> Protected-mode path (optional staged)
+-------------------------------------------------------
+Enhancement phases:
+- Phase A: Stay real mode, validated A20.
+- Phase B: Build GDT and switch to 32-bit protected mode.
+- Phase C: Add basic IDT and exception handlers.
+- Phase D: Optional paging experiments.
+
+Why:
+- Unlocks cleaner memory usage and larger software architecture.
+
+
+3.3 Basic low memory allocator
+------------------------------
+Enhancement:
+- Add a tiny bump allocator for runtime buffers.
+- Separate loader buffer, filesystem buffer, and command work area.
+
+Why:
+- Reduces accidental memory overlap bugs.
+
+
+4) Hardware Enablement Roadmap (Future Ideas)
+==============================================
+
+4.1 Sound support (requested future direction)
+----------------------------------------------
+Potential targets:
+- PC Speaker (quickest, simple beeps/tones)
+- Sound Blaster 16 compatible path (classic DOS hardware/emulation)
+- AdLib/OPL2 FM synthesis (music/demo oriented)
+
+Suggested order:
+1) PC speaker driver + simple play tone command.
+2) Detect SB16 on common ports (0x220 etc.) and support DMA/IRQ basics.
+3) Add minimal WAV/PCM playback utility in shell.
+
+Why:
+- Immediate user-visible improvement.
+- Good low-level learning path for DMA/IRQ programming.
+
+
+4.2 Input hardware improvements
+-------------------------------
+Enhancement:
+- Better keyboard scan-code handling (extended keys).
+- Optional mouse support via BIOS/PS2 services.
+
+Why:
+- Improves shell UX and editor use.
+
+
+4.3 Display and graphics expansion
+----------------------------------
+Enhancement:
+- Text mode improvements: colors, window regions, cursor utilities.
+- VESA BIOS modes for higher resolution graphics (where available).
+- Primitive 2D API for demos/tools.
+
+Why:
+- Better UI and educational graphics experiments.
+
+
+4.4 Storage and filesystem
+--------------------------
+Enhancement:
+- Add FAT12 reader in loader/shell utilities.
+- Later FAT16/partition support in utilities.
+
+Why:
+- Enables loading files by name instead of fixed sectors.
+
+
+4.5 Serial and network experimentation
+--------------------------------------
+Enhancement:
+- UART serial driver (COM1) for logs and shell I/O.
+- Optional NE2000-compatible network experiments in VM.
+
+Why:
+- Makes debugging easier and opens networking projects.
+
+
+4.6 Printer and peripheral cleanup
+----------------------------------
+Enhancement:
+- Audit existing printer/legacy peripheral paths.
+- Document supported hardware and required BIOS assumptions.
+
+Why:
+- Preserves historical features and avoids regressions.
+
+
+5) Build/Tooling/Developer Experience
+=====================================
+
+5.1 Add CI checks
+-----------------
+Enhancement:
+- Assemble bootloader on each push.
+- Build image when shell artifact available.
+- Optional headless QEMU smoke boot.
+
+Why:
+- Detects regressions early.
+
+
+5.2 Deterministic shell artifact flow
+-------------------------------------
+Enhancement:
+- Document one reproducible path to generate SHELL.BIN
+  (DOSBox/OpenWatcom/Turbo-C environment notes).
+- Track shell artifact version metadata.
+
+Why:
+- Easier onboarding and reproducible builds.
+
+
+5.3 Developer diagnostics scripts
+---------------------------------
+Enhancement:
+- Script to dump image sector map.
+- Script to verify boot signature and shell placement.
+- Script to run quick emulator matrix (where available).
+
+Why:
+- Faster troubleshooting and contributor confidence.
+
+
+6) Documentation Enhancements
+=============================
+
+6.1 Add troubleshooting playbook
+--------------------------------
+Include:
+- "Boot hangs at..." scenarios
+- Disk read failure causes
+- A20 failure causes
+- Missing toolchain/build artifact causes
+
+
+6.2 Add architecture decision records (ADR)
+--------------------------------------------
+Enhancement:
+- Keep short ADR notes for major decisions:
+  - Why BIOS path kept
+  - Why stage-2 loader introduced
+  - Why/when protected mode adopted
+
+Why:
+- Future contributors understand intent quickly.
+
+
+7) Suggested Milestone Plan
+===========================
+
+Milestone 1 (Stability)
+-----------------------
+- A20 verification
+- disk read retries
+- better boot diagnostics
+
+Milestone 2 (Scalability)
+-------------------------
+- stage-2 loader
+- LBA read support + CHS fallback
+- remove 18-sector cap
+
+Milestone 3 (Usability)
+-----------------------
+- improved shell docs
+- troubleshooting guide
+- CI build checks
+
+Milestone 4 (Hardware)
+----------------------
+- PC speaker command
+- keyboard enhancements
+- optional serial debug output
+
+Milestone 5 (Advanced)
+----------------------
+- protected mode prototype
+- memory map handling
+- optional FAT loading path
+
+
+8) Contribution Guidance for New Work
+=====================================
+
+- Keep compatibility with current boot path unless a milestone explicitly replaces it.
+- Land small, testable PRs (one subsystem improvement at a time).
+- For bootloader changes, always verify binary assembles and remains boot-signature valid.
+- Document assumptions in README and/or this roadmap as discoveries are made.
+
+
+End of roadmap.
