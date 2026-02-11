@@ -5,7 +5,7 @@ A tiny OS boots from a X86 (we tested on Intel 386 - Pentium II/III ) we wrote t
            “bootstrap loader”, 
            “its own loader”, 
            “Kernel” and “Shell”.
-Languages used are “Assembly” and “C”, 
+Languages used are “Assembly” and “C", 
 development environment was windows98SE with Turbo C compiler.
 
 Black hat libraries were written in Assembly language and embedded with the Clanguage.
@@ -13,53 +13,44 @@ File formats used are “.EXE” and “.COM”
 Hardware  supports and  Drivers:   1.44MB floppy  disk,  PIC,  Keyboard controller,Graphics driver and printer driver.
 Memory access capacity of 1MB, with the paging size of 16KB and takes 5-6 sec toboot.
 
-## NASM build flow (single build for all needed files)
+## Legacy shell first (C/C++ source, no ASM shell substitute)
 
-The repository now includes a NASM-based boot path where one build compiles all required parts:
+This repository keeps and uses the original shell source tree (`SHELL.CPP`, `COMMANDS.CPP`, `DRAW.CPP`, `DATE.CPP`, `DT&TIME.CPP`, `EQUIP.CPP`, `EDITOR.CPP`, etc.).
 
-- `bootloader.asm` (boot sector)
-- `nixdos_shell.asm` (main shell)
-- legacy command modules in `modules/*.c` (`time`, `ctime`, `date`, `cdate`, `clock`, `ccolor`, `ndedit`, `prtmsg`, `prtscr`, `equip`)
+The boot flow now expects a **legacy shell flat binary** (`SHELL.BIN`) built from those C/C++ sources in a DOS/Turbo-C compatible environment.
 
-`compile.sh` assembles all of the above and packs them into one bootable 1.44MB image.
+## Build flow
 
-### Build everything
+1) Build legacy shell binary from C/C++ sources (outside this Linux container if needed).
+2) Provide that binary via one of:
+
+```bash
+export NIXDOS_LEGACY_SHELL_BIN=/path/to/SHELL.BIN
+# or copy it to repository root as SHELL.BIN
+```
+
+3) Build bootable image:
 
 ```bash
 ./compile.sh
 ```
 
-Output in `build/` includes:
+Outputs:
 
-- `nixdos.img` (bootable floppy image)
-- `bootloader.bin`
-- `nixdos_shell.bin`
-- one `.bin` per module
+- `build/bootloader.bin`
+- `build/nixdos_shell.bin` (imported legacy shell binary)
+- `build/nixdos.img`
 
-### Run in VM
+## Run in VM
 
 ```bash
 ./run_vm.sh
 ```
 
-(Equivalent: `qemu-system-i386 -fda build/nixdos.img`)
-
-### Write to medium / disk
+## Write to medium / disk
 
 ```bash
 ./write_medium.sh /tmp/nixdos-disk.img
-# or block device:
+# or block device
 # sudo ./write_medium.sh /dev/sdX
 ```
-
-### Command behavior
-
-- `HELP`, `CLR`, `VERS`, `RBOOT`, `SDOWN` are built into `nixdos_shell.asm`.
-- `TIME`, `CTIME`, `DATE`, `CDATE`, `CLOCK`, `CCOLOR`, `NDEDIT`, `PRTMSG`, `PRTSCR`, `EQUIP` are compiled from C source into separate flat module binaries.
-- When those module commands are called, the shell reads the module sector from disk and executes it.
-
-### Legacy source compatibility note
-
-The existing `SHELL.CPP`, `COMMANDS.CPP`, `DRAW.CPP`, `DATE.CPP`, `DT&TIME.CPP`, `EQUIP.CPP`, `EDITOR.CPP`, and related files are the original multi-module shell source tree.
-
-This NASM boot flow is a bootable VM path that now builds command modules from C sources (flat binaries) and loads them from disk sectors at runtime.
