@@ -13,42 +13,53 @@ File formats used are “.EXE” and “.COM”
 Hardware  supports and  Drivers:   1.44MB floppy  disk,  PIC,  Keyboard controller,Graphics driver and printer driver.
 Memory access capacity of 1MB, with the paging size of 16KB and takes 5-6 sec toboot.
 
-## NASM build flow (new)
+## NASM build flow (single build for all needed files)
 
-This repository now includes a NASM-compatible boot path for NixDOS:
+The repository now includes a NASM-based boot path where one build compiles all required parts:
 
-- `bootloader.asm` – 512-byte boot sector that loads the shell from disk.
-- `nixdos_shell.asm` – 16-bit real-mode shell stage loaded at `0x0000:0x1000`.
-- `compile.sh` – build script that assembles both binaries and creates a bootable floppy image.
+- `bootloader.asm` (boot sector)
+- `nixdos_shell.asm` (main shell)
+- command modules in `modules/*.asm` (`time`, `ctime`, `date`, `cdate`, `clock`, `ccolor`, `ndedit`, `prtmsg`, `prtscr`, `equip`)
 
-### Build
+`compile.sh` assembles all of the above and packs them into one bootable 1.44MB image.
+
+### Build everything
 
 ```bash
 ./compile.sh
 ```
 
-Build output:
+Output in `build/` includes:
 
-- `build/bootloader.bin`
-- `build/nixdos_shell.bin`
-- `build/nixdos.img`
+- `nixdos.img` (bootable floppy image)
+- `bootloader.bin`
+- `nixdos_shell.bin`
+- one `.bin` per module
 
-### Run in QEMU
+### Run in VM
 
 ```bash
-qemu-system-i386 -fda build/nixdos.img
+./run_vm.sh
 ```
 
-Shell commands:
+(Equivalent: `qemu-system-i386 -fda build/nixdos.img`)
 
-- `HELP`
-- `CLS`
-- `VER`
-- `REBOOT`
-- `HALT`
+### Write to medium / disk
+
+```bash
+./write_medium.sh /tmp/nixdos-disk.img
+# or block device:
+# sudo ./write_medium.sh /dev/sdX
+```
+
+### Command behavior
+
+- `HELP`, `CLR`, `VERS`, `RBOOT`, `SDOWN` are built into `nixdos_shell.asm`.
+- `TIME`, `CTIME`, `DATE`, `CDATE`, `CLOCK`, `CCOLOR`, `NDEDIT`, `PRTMSG`, `PRTSCR`, `EQUIP` are separate module binaries.
+- When those module commands are called, the shell reads the module sector from disk and executes it.
 
 ### Legacy source compatibility note
 
 The existing `SHELL.CPP`, `COMMANDS.CPP`, `DRAW.CPP`, `DATE.CPP`, `DT&TIME.CPP`, `EQUIP.CPP`, `EDITOR.CPP`, and related files are the original multi-module shell source tree.
 
-This NASM boot flow does **not** replace those historical sources; it provides a bootable NASM path and mirrors the same command names in `nixdos_shell.asm` (`help/clr/vers/time/ctime/date/cdate/clock/ccolor/ndedit/prtmsg/prtscr/equip/rboot/sdown`) so the command surface aligns with the legacy shell design.
+This NASM boot flow is a bootable assembly path for VM execution. It mirrors the same command names and now loads command modules from disk in one image build.

@@ -1,9 +1,26 @@
 ; NixDOS shell (NASM, 16-bit real mode)
 ; Loaded by bootloader at 0000:1000 and executed there.
-; This command surface mirrors the legacy SHELL.CPP command set.
+; Legacy commands are implemented as external sector modules.
 
 BITS 16
 ORG 0x1000
+
+%define MOD_LOAD_ADDR 0x2000
+%define MOD_SEG 0x0000
+
+; Module sector map (1.44MB floppy, cylinder 0/head 0 only)
+; sector 1 = bootloader, sector 2.. = shell payload
+; compile.sh enforces shell <= 2 sectors, so modules start at sector 4.
+%define SEC_TIME   4
+%define SEC_CTIME  5
+%define SEC_DATE   6
+%define SEC_CDATE  7
+%define SEC_CLOCK  8
+%define SEC_CCOLOR 9
+%define SEC_NDEDIT 10
+%define SEC_PRTMSG 11
+%define SEC_PRTSCR 12
+%define SEC_EQUIP  13
 
 start:
     cli
@@ -11,6 +28,8 @@ start:
     mov ds, ax
     mov es, ax
     sti
+
+    mov [boot_drive], dl
 
     call cls
     mov si, welcome_msg
@@ -73,7 +92,7 @@ main_loop:
     mov di, cmd_clr
     call streq
     cmp al, 1
-    je do_cls
+    je do_clr
 
     mov si, cmd_buffer
     mov di, cmd_vers
@@ -94,92 +113,87 @@ main_loop:
     je do_halt
 
     mov si, cmd_buffer
-    mov di, empty_cmd
-    call streq
-    cmp al, 1
-    je main_loop
-
-    ; Legacy command names from SHELL.CPP that are acknowledged here.
-    mov si, cmd_buffer
     mov di, cmd_time
     call streq
     cmp al, 1
-    je do_legacy
+    je do_time
 
     mov si, cmd_buffer
     mov di, cmd_ctime
     call streq
     cmp al, 1
-    je do_legacy
+    je do_ctime
 
     mov si, cmd_buffer
     mov di, cmd_date
     call streq
     cmp al, 1
-    je do_legacy
+    je do_date
 
     mov si, cmd_buffer
     mov di, cmd_cdate
     call streq
     cmp al, 1
-    je do_legacy
+    je do_cdate
 
     mov si, cmd_buffer
     mov di, cmd_clock
     call streq
     cmp al, 1
-    je do_legacy
+    je do_clock
 
     mov si, cmd_buffer
     mov di, cmd_ccolor
     call streq
     cmp al, 1
-    je do_legacy
+    je do_ccolor
 
     mov si, cmd_buffer
     mov di, cmd_ndedit
     call streq
     cmp al, 1
-    je do_legacy
+    je do_ndedit
 
     mov si, cmd_buffer
     mov di, cmd_prtmsg
     call streq
     cmp al, 1
-    je do_legacy
+    je do_prtmsg
 
     mov si, cmd_buffer
     mov di, cmd_prtscr
     call streq
     cmp al, 1
-    je do_legacy
+    je do_prtscr
 
     mov si, cmd_buffer
     mov di, cmd_equip
     call streq
     cmp al, 1
-    je do_legacy
+    je do_equip
+
+    mov si, cmd_buffer
+    mov di, empty_cmd
+    call streq
+    cmp al, 1
+    je main_loop
 
     mov si, unknown_msg
     call print_string
     jmp main_loop
 
+; internal commands
 do_help:
     mov si, help_msg
     call print_string
     jmp main_loop
 
-do_cls:
+do_clr:
     call cls
     jmp main_loop
 
 do_vers:
     mov si, ver_msg
-    call print_string
-    jmp main_loop
-
-do_legacy:
-    mov si, legacy_msg
     call print_string
     jmp main_loop
 
@@ -192,6 +206,48 @@ do_halt:
 .halt_loop:
     hlt
     jmp .halt_loop
+
+; external module commands
+do_time:   mov cl, SEC_TIME   ; sector number
+           jmp run_module
+do_ctime:  mov cl, SEC_CTIME
+           jmp run_module
+do_date:   mov cl, SEC_DATE
+           jmp run_module
+do_cdate:  mov cl, SEC_CDATE
+           jmp run_module
+do_clock:  mov cl, SEC_CLOCK
+           jmp run_module
+do_ccolor: mov cl, SEC_CCOLOR
+           jmp run_module
+do_ndedit: mov cl, SEC_NDEDIT
+           jmp run_module
+do_prtmsg: mov cl, SEC_PRTMSG
+           jmp run_module
+do_prtscr: mov cl, SEC_PRTSCR
+           jmp run_module
+do_equip:  mov cl, SEC_EQUIP
+
+run_module:
+    xor ax, ax
+    mov es, ax
+    mov bx, MOD_LOAD_ADDR
+    mov ah, 0x02
+    mov al, 0x01
+    mov ch, 0x00
+    ; CL already set to module sector
+    mov dh, 0x00
+    mov dl, [boot_drive]
+    int 0x13
+    jc module_read_error
+
+    call far [module_ptr]
+    jmp main_loop
+
+module_read_error:
+    mov si, module_read_error_msg
+    call print_string
+    jmp main_loop
 
 ; uppercase in-place for zero-terminated string in SI
 uppercase:
@@ -245,7 +301,7 @@ cls:
 
 putc:
     mov ah, 0x0E
-    mov bh, 0x00
+    mov bh, 0
     mov bl, 0x07
     int 0x10
     ret
@@ -259,11 +315,14 @@ print_string:
 .done:
     ret
 
-welcome_msg db 'NixDOS shell loaded.', 0x0D, 0x0A, 'Legacy command names are recognized.', 0x0D, 0x0A, 0
+module_ptr dw MOD_LOAD_ADDR, MOD_SEG
+boot_drive db 0
+
+welcome_msg db 'NixDOS shell loaded.', 0x0D, 0x0A, 'Legacy modules are disk-loaded.', 0x0D, 0x0A, 0
 prompt      db 'nixdos> ', 0
 help_msg    db 'HELP CLR VERS TIME CTIME DATE CDATE CLOCK CCOLOR NDEDIT PRTMSG PRTSCR EQUIP RBOOT SDOWN', 0x0D, 0x0A, 0
-ver_msg     db 'NixDOS NASM shell (legacy-compatible command map)', 0x0D, 0x0A, 0
-legacy_msg  db 'Command recognized (legacy module placeholder in this NASM build).', 0x0D, 0x0A, 0
+ver_msg     db 'NixDOS NASM shell + external module loader', 0x0D, 0x0A, 0
+module_read_error_msg db 'Module load failed.', 0x0D, 0x0A, 0
 unknown_msg db 'Unknown command.', 0x0D, 0x0A, 0
 
 cmd_help   db 'HELP', 0
