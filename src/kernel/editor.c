@@ -189,10 +189,12 @@ void editor_run(const char *filename)
             insert("    ", 4);
             break;
         case '\n': {
-            /* keep the indentation of the current line */
+            /* keep the indentation of the current line, indent after '{' */
             char ind[64];
-            int s = line_start(cur), n = 0;
-            while (s + n < cur && buf[s + n] == ' ' && n < 63) n++;
+            int s = line_start(cur), n = 0, b = cur;
+            while (s + n < cur && buf[s + n] == ' ' && n < 59) n++;
+            while (b > s && buf[b - 1] == ' ') b--;
+            if (b > s && buf[b - 1] == '{') n += 4;
             ind[0] = '\n';
             for (int i = 0; i < n; i++) ind[i + 1] = ' ';
             insert(ind, n + 1);
@@ -201,6 +203,13 @@ void editor_run(const char *filename)
         default:
             if (k >= 32 && k < 127) {
                 char c = (char)k;
+                /* '}' typed on a blank indented line: outdent one level */
+                int s = line_start(cur), blank = 1;
+                for (int i = s; i < cur; i++) if (buf[i] != ' ') blank = 0;
+                if (c == '}' && blank && cur - s >= 4) {
+                    cur -= 4;
+                    delete_at(cur, 4);
+                }
                 insert(&c, 1);
             }
             break;

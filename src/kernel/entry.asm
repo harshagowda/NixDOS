@@ -164,3 +164,5 @@ call_on_stack:
     pop ebx
     pop ebp
     ret
+
+section .note.GNU-stack noalloc noexec nowrite progbits

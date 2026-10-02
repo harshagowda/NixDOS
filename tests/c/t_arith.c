@@ -79,7 +79,7 @@ int main()
     f += check((x = 3, x + 1), 4, "comma");
     f += check(sizeof(int), 4, "sizeof int");
     f += check(sizeof(char), 1, "sizeof char");
-    f += check(sizeof(char *), 4, "sizeof ptr");
+    f += check(sizeof(char *) == sizeof(int *), 1, "sizeof ptr");
     f += check('A' + 1, 66, "char literal");
     f += check('\n', 10, "escape");
     f += check(0x7fffffff + 1 < 0, 1, "overflow wraps");

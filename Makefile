@@ -20,7 +20,7 @@ QEMU     := qemu-system-i386
 CFLAGS   := -m32 -march=i386 -std=gnu99 -ffreestanding -fno-pic -fno-pie -fno-stack-protector \
             -fno-asynchronous-unwind-tables -fno-builtin -nostdlib -mgeneral-regs-only \
             -O2 -Wall -Wextra -Wno-unused-parameter --param=min-pagesize=0
-LDFLAGS  := -m elf_i386 -T $(KSRC)/linker.ld -nostdlib
+LDFLAGS  := -m elf_i386 -T $(KSRC)/linker.ld -nostdlib --no-warn-rwx-segments
 
 C_SRCS   := $(wildcard $(KSRC)/*.c)
 C_OBJS   := $(patsubst $(KSRC)/%.c,$(BUILD)/kernel/%.o,$(C_SRCS))

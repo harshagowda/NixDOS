@@ -5,6 +5,138 @@ The original environment was Windows 98 SE + Turbo C, and the codebase still pre
 
 This repository keeps the historical C/C++ shell sources and a modernized build wrapper that can pack a bootable floppy image.
 
+It also contains **NixDOS 2.0** (`src/`): a complete rewrite as a 32-bit protected-mode operating
+system with its own file system, editor and a **built-in C compiler**. NixDOS 2 builds with a normal
+Linux toolchain and keeps the original commands (`vers`, `ctime`, `cdate`, `ccolor`, `ndedit`, `prtmsg`,
+`equip`, `rboot`, `sdown`, ...). The legacy 1.0 sources below are unchanged.
+
+---
+
+## NixDOS 2.0 quick start
+
+Requirements: `gcc` (with `-m32` support), `binutils`, `nasm`, `python3`, `qemu-system-i386`.
+
+```bash
+make              # builds build/nixdos2.img (8 MiB bootable hard-disk image)
+make run          # boots it in QEMU (VGA window, console also mirrored to this terminal)
+make run-serial   # boots without a window; use the OS from this terminal
+make test         # automated end-to-end tests in QEMU
+```
+
+Inside NixDOS:
+
+```text
+$] ls                         list files (sample programs are pre-installed)
+$] cat hello.c                show a file
+$] cc hello.c                 compile and run a C program
+$] cc snake.c -o snake.nxe    compile to an executable file ...
+$] snake                      ... and run it by name
+$] edit myprog.c              full-screen editor (^S save, ^Q quit)
+$] help                       everything else
+```
+
+Ctrl+C stops a running program. A program that crashes (e.g. divides by zero) is stopped
+and you are returned to the shell. Files are saved to the disk and survive reboots.
+
+### What NixDOS 2 contains
+
+| Part | File(s) | What it does |
+|---|---|---|
+| Boot sector | `src/boot/boot.asm` | Enables **A20** (BIOS, fast gate, keyboard controller) and *verifies* it with a 1 MiB wrap-around test; loads the kernel with INT 13h LBA reads (with retries); switches to 32-bit protected mode |
+| Kernel core | `entry.asm`, `kernel.c`, `idt.c` | Entry, interrupt table, 8259 PIC, CPU exception handling |
+| Drivers | `console.c`, `serial.c`, `keyboard.c`, `timer.c`, `rtc.c`, `ata.c` | VGA text mode, COM1 serial console, PS/2 keyboard, PIT timer + PC speaker, CMOS clock, ATA hard disk (PIO) |
+| Memory | `mem.c` | Memory size detection, heap allocator above 1 MiB |
+| File system | `fs.c` | **NXFS**: 96 files of up to 64 KiB each, stored on the boot disk |
+| Shell | `shell.c` | Commands, history (Up/Down), line editing, `echo > file` |
+| Editor | `editor.c` | NixEdit full-screen text editor with auto-indent |
+| Compiler | `cc.c`, `api.h` | **NixC**, a one-pass C compiler that generates x86 machine code |
+| Runtime | `program.c` | Loads/runs programs, library functions for programs, Ctrl+C and crash handling |
+| Tools | `tools/mkimage.py`, `Makefile` | Builds the disk image and pre-installs `src/programs/*` |
+| Tests | `tests/` | Boots the OS in QEMU and drives it over the serial port |
+
+### Memory map (paging off, flat 4 GiB segments)
+
+```text
+0x00000500  pointer to the program API table
+0x00010000  kernel (loaded by the boot sector)
+0x00090000  kernel stack top
+0x000B8000  VGA text memory
+0x00100000  kernel heap (3 MiB)          <- above 1 MiB: needs A20
+0x00400000  user program code (512 KiB)
+0x00480000  user program data (512 KiB)
+0x00800000  user program stack top / start of the program heap (malloc)
+```
+
+### Disk layout (512-byte sectors)
+
+```text
+LBA 0          boot sector
+LBA 1..1023    kernel
+LBA 1024       NXFS superblock
+LBA 1025-1040  directory (64-byte entries)
+LBA 1041..     file data, one 64 KiB slot per file
+```
+
+### NixC - the built-in C compiler
+
+NixC compiles a practical subset of C directly to 32-bit x86 machine code in one pass;
+there is no assembler or linker step. `cc file.c` compiles straight into the program area
+and runs it. `cc file.c -o file.nxe` writes an executable instead (16-byte header + code + data).
+
+Supported:
+
+- `int`, `char`, `void`, pointers of any depth, one-dimensional arrays, `unsigned`/`long`/`const`/`static`
+  are accepted (treated as `int` or ignored)
+- global and local variables with initialisers (`int a[] = {1, 2, 3};`, `char s[] = "hi";`, `char *names[] = {...}`)
+- functions, recursion, prototypes, calling a function before it is defined, `main(int argc, char **argv)`
+- `if`/`else`, `while`, `do`/`while`, `for` (with declarations), `switch`/`case`/`default`, `break`, `continue`, `return`
+- all C arithmetic, bitwise, logical, comparison and assignment operators, `?:`, `,`, prefix/postfix `++`/`--`,
+  casts, `sizeof`, pointer arithmetic, `&` and `*`
+- decimal/hex/octal numbers, character and string escapes, `//` and `/* */` comments
+- `#define NAME <integer>`; other `#` lines such as `#include` are ignored
+
+Not supported: `struct`/`union`/`enum`/`typedef`, floating point, function pointers,
+multi-dimensional arrays, `goto`, and macros with parameters.
+
+Library functions programs can call:
+
+```text
+I/O       printf sprintf puts putchar getchar gets(buf, max) getkey kbhit
+strings   strlen strcmp strncmp strcpy strcat strchr memset memcpy atoi
+chars     isdigit isalpha isspace toupper tolower abs
+memory    malloc free
+time      time ticks sleep(ms) rand srand
+screen    cls gotoxy(x, y) setcolor(fg, bg) putat(x, y, ch, color) wherex wherey beep(freq, ms)
+files     readfile(name, buf, max) writefile(name, buf, len)
+program   exit(code)
+```
+
+Constants: `NULL`, `EOF`, `true`, `false`, `KEY_UP`/`DOWN`/`LEFT`/`RIGHT`/`HOME`/`END`/`PGUP`/`PGDN`/`DEL`/`ESC`/`ENTER`,
+the 16 colours (`BLACK` ... `YELLOW`, `WHITE`), `SCREEN_W`, `SCREEN_H`.
+
+How it works: an expression's value is kept in `EAX`; the left operand of a binary operator is pushed
+on the stack while the right one is computed. Locals live at `[EBP-n]` and parameters at `[EBP+8+4i]`.
+Calls use the cdecl convention, so compiled programs call the kernel's library functions directly
+through a table whose address is stored at `0x500`. Executables keep working when the kernel is rebuilt,
+as long as new library functions are only ever added to the end of the list in `src/kernel/api.h`.
+
+Sample programs (`src/programs/`): `hello.c`, `primes.c`, `fib.c`, `sort.c`, `strings.c`, `files.c`,
+`queens.c`, `mandel.c`, `calc.c`, `guess.c`, `snake.c`.
+
+### Tests
+
+`make test` boots a copy of the image in QEMU and checks the shell, file system, editor, crash handling,
+Ctrl+C, persistence across a reboot and the compiler. The compiler tests in `tests/c/` are also built
+with the host GCC, and the two outputs must be identical.
+
+### Limits and known gaps
+
+- BIOS boot only (no UEFI). The boot sector needs INT 13h LBA extensions, which means a hard disk or USB
+  stick, not a floppy. It has no partition table, which some real BIOSes need before they will boot a USB stick.
+- Programs run in ring 0 without memory protection. A program cannot crash the OS through divide errors
+  or similar faults, but a bad pointer can still overwrite kernel memory.
+- One program at a time (no multitasking). At least 9 MiB of RAM is needed to run programs (QEMU: `-m 32`).
+
 ---
 
 ## Project goals

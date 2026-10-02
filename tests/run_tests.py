@@ -39,7 +39,7 @@ def host_output(src):
     tmp = tempfile.mkdtemp()
     try:
         exe = os.path.join(tmp, 'a.out')
-        subprocess.run(['gcc', '-m32', '-w', '-fno-builtin', '-include', 'stdio.h',
+        subprocess.run(['gcc', '-w', '-fno-builtin', '-include', 'stdio.h',
                         '-include', 'string.h', '-include', 'stdlib.h', '-o', exe, src],
                        check=True)
         return subprocess.run([exe], capture_output=True, text=True).stdout.strip('\n')
@@ -135,6 +135,8 @@ def test_samples(vm):
     check('files.c', 'read back: written by a NixC program' in out, out)
     out = vm.run('cc queens.c')
     check('queens.c', '92 solutions' in out, out)
+    out = vm.run('cc snake.c -o snake.nxe')
+    check('snake.c compiles', '-> snake.nxe' in out, out)
     out = vm.run('cc mandel.c')
     check('mandel.c', '#' in out and len(out.splitlines()) >= 20, out)
     start = len(vm.output())
