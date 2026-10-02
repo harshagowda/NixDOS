@@ -1,0 +1,141 @@
+// Minimal std::unordered_map for NixDOS native programs.
+// Supports what Wolf4SDL needs: operator[], find, end, begin, clear, size,
+// erase(key), count, and iteration (it->first / it->second).
+// Implemented as an open-addressing hash table with linear probing.
+#ifndef _NIX_UNORDERED_MAP
+#define _NIX_UNORDERED_MAP
+
+#include <stdlib.h>
+#include <string.h>
+#include <new>
+
+namespace std {
+
+template <class K>
+struct hash {
+    size_t operator()(const K &k) const { return (size_t)k * 2654435761u; }
+};
+
+template <class A, class B>
+struct pair {
+    A first;
+    B second;
+};
+
+template <class K, class V, class H = hash<K> >
+class unordered_map {
+public:
+    typedef pair<const K, V> value_type;
+
+private:
+    struct slot {
+        bool used;
+        value_type *kv;
+    };
+    slot *slots_;
+    size_t cap_, count_;
+
+    size_t index_of(const K &k) const
+    {
+        size_t i = H()(k) & (cap_ - 1);
+        while (slots_[i].used && !(slots_[i].kv->first == k)) i = (i + 1) & (cap_ - 1);
+        return i;
+    }
+
+    void grow()
+    {
+        size_t oldcap = cap_;
+        slot *old = slots_;
+        cap_ = cap_ ? cap_ * 2 : 64;
+        slots_ = (slot *)calloc(cap_, sizeof(slot));
+        for (size_t i = 0; i < oldcap; i++) {
+            if (old[i].used) {
+                size_t j = index_of(old[i].kv->first);
+                slots_[j] = old[i];
+            }
+        }
+        free(old);
+    }
+
+public:
+    class iterator {
+        friend class unordered_map;
+        slot *s_, *end_;
+        void skip() { while (s_ != end_ && !s_->used) s_++; }
+    public:
+        iterator(slot *s, slot *e) : s_(s), end_(e) { skip(); }
+        value_type &operator*() const { return *s_->kv; }
+        value_type *operator->() const { return s_->kv; }
+        iterator &operator++() { s_++; skip(); return *this; }
+        bool operator==(const iterator &o) const { return s_ == o.s_; }
+        bool operator!=(const iterator &o) const { return s_ != o.s_; }
+    };
+
+    unordered_map() : slots_(0), cap_(0), count_(0) {}
+    ~unordered_map() { clear(); free(slots_); }
+
+    iterator begin() { return iterator(slots_, slots_ + cap_); }
+    iterator end() { return iterator(slots_ + cap_, slots_ + cap_); }
+    size_t size() const { return count_; }
+    bool empty() const { return count_ == 0; }
+
+    iterator find(const K &k)
+    {
+        if (!cap_) return end();
+        size_t i = index_of(k);
+        return slots_[i].used ? iterator(slots_ + i, slots_ + cap_) : end();
+    }
+
+    size_t count(const K &k) { return find(k) != end() ? 1 : 0; }
+
+    V &operator[](const K &k)
+    {
+        if ((count_ + 1) * 2 > cap_) grow();
+        size_t i = index_of(k);
+        if (!slots_[i].used) {
+            void *mem = malloc(sizeof(value_type));
+            value_type *kv = (value_type *)mem;
+            new ((void *)&kv->first) K(k);
+            new ((void *)&kv->second) V();
+            slots_[i].used = true;
+            slots_[i].kv = kv;
+            count_++;
+        }
+        return slots_[i].kv->second;
+    }
+
+    void clear()
+    {
+        for (size_t i = 0; i < cap_; i++) {
+            if (slots_[i].used) {
+                free(slots_[i].kv);
+                slots_[i].used = false;
+            }
+        }
+        count_ = 0;
+    }
+
+    size_t erase(const K &k)
+    {
+        if (!cap_) return 0;
+        size_t i = index_of(k);
+        if (!slots_[i].used) return 0;
+        free(slots_[i].kv);
+        slots_[i].used = false;
+        count_--;
+        /* re-insert the rest of the probe cluster */
+        size_t j = (i + 1) & (cap_ - 1);
+        while (slots_[j].used) {
+            slot s = slots_[j];
+            slots_[j].used = false;
+            size_t n = index_of(s.kv->first);
+            slots_[n] = s;
+            j = (j + 1) & (cap_ - 1);
+        }
+        return 1;
+    }
+};
+
+} // namespace std
+
+#endif

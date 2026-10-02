@@ -1,2 +1,4 @@
 build/
 __pycache__/
+ports/wolf3d/data/*
+!ports/wolf3d/data/README.txt

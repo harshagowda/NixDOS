@@ -100,6 +100,45 @@ static int api_wherey(void) { return con_gety(); }
 static void api_beep(int freq, int ms) { if (ms > 0) speaker_beep((u32)freq, (u32)ms); }
 static int api_readfile(const char *name, char *buf, int max) { return max < 0 ? -1 : fs_read(name, buf, (u32)max); }
 static int api_writefile(const char *name, const char *buf, int len) { return len < 0 ? -1 : fs_write(name, buf, (u32)len); }
+static int api_open(const char *name, int flags) { return fs_open(name, flags); }
+static int api_close(int fd) { return fs_hclose(fd); }
+static int api_read(int fd, void *buf, int n) { return n < 0 ? -1 : fs_hread(fd, buf, (u32)n); }
+static int api_write(int fd, const void *buf, int n) { return n < 0 ? -1 : fs_hwrite(fd, buf, (u32)n); }
+static int api_lseek(int fd, int off, int whence) { return fs_hseek(fd, off, whence); }
+static int api_unlink(const char *name) { return fs_delete(name); }
+
+static int api_filesize(const char *name)
+{
+    const struct fs_dirent *e = fs_entry(fs_find(name));
+    return e ? (int)e->size : -1;
+}
+
+static int api_vgamode(int mode)
+{
+    if (mode == 0x13) vga_set_graphics();
+    else if (mode == 3) vga_set_text();
+    else return -1;
+    return 0;
+}
+
+static void api_vgapalette(const u8 *rgb, int first, int count) { vga_set_palette(rgb, first, count); }
+static void api_vgablit(const u8 *frame) { vga_blit(frame); }
+static void api_vgawait(void) { vga_wait_vsync(); }
+static void api_kbdraw(int on) { kbd_set_raw(on); }
+static int api_scancode(void) { prog_check_ctrl_c(); return kbd_get_scancode(); }
+
+static u32 prog_heap_start, prog_heap_end;
+static void api_heapinfo(u32 *start, u32 *end) { *start = prog_heap_start; *end = prog_heap_end; }
+
+static int api_audioopen(int rate) { return rate <= 0 ? -1 : sb_start((u32)rate); }
+static void api_audioclose(void) { sb_stop(); }
+static int api_audiohalves(void) { return (int)sb_halves_done(); }
+static int api_audiobuffer(void) { return sb_present() ? (int)SB_DMA_BUF : 0; }
+
+static void api_conwrite(const char *s, int n)
+{
+    for (int i = 0; i < n; i++) con_putc(s[i]);
+}
 
 void *api_table[] = {
 #define API(name, fn, nargs, ret) (void *)fn,
@@ -108,6 +147,7 @@ void *api_table[] = {
 };
 
 /* ---- running programs ------------------------------------------------------ */
+static u32 prog_lo = PROG_CODE, prog_hi = PROG_CODE + PROG_CODE_MAX;   /* code range */
 void prog_init(void)
 {
     *(void ***)API_PTR_ADDR = api_table;
@@ -140,7 +180,7 @@ void prog_check_ctrl_c(void)
 void check_abort(struct regs *r)
 {
     if (prog_running && abort_requested &&
-        r->eip >= PROG_CODE && r->eip < PROG_CODE + PROG_CODE_MAX) {
+        r->eip >= prog_lo && r->eip < prog_hi) {
         abort_requested = 0;
         r->eip = (u32)prog_abort_entry;
     }
@@ -150,14 +190,14 @@ void prog_fault(struct regs *r, const char *what)
 {
     con_setcolor(12, 0);
     kprintf("\n*** program crashed: %s at %p", what, r->eip);
-    if (r->eip >= PROG_CODE && r->eip < PROG_CODE + PROG_CODE_MAX)
-        kprintf(" (code offset %x)", r->eip - PROG_CODE);
+    if (r->eip >= prog_lo && r->eip < prog_hi)
+        kprintf(" (offset %x)", r->eip - PROG_CODE);
     kprintf(" ***\n");
     con_setcolor(7, 0);
     r->eip = (u32)prog_crash_entry;
 }
 
-int run_program(u32 entry, int argc, char **argv)
+static int run_at(u32 entry_addr, int argc, char **argv)
 {
     volatile int ret;
     u32 heap_end = mem_total_kb() * 1024;
@@ -166,23 +206,71 @@ int run_program(u32 entry, int argc, char **argv)
         kprintf("not enough memory to run programs (need > 8 MiB)\n");
         return -1;
     }
+    prog_heap_start = PROG_HEAP_START;
+    prog_heap_end = heap_end;
     heap_init(&prog_heap, PROG_HEAP_START, heap_end - PROG_HEAP_START);
     prog_init();
+    __asm__ volatile("fninit");
 
     abort_requested = 0;
     prog_running = 1;
     if (k_setjmp(prog_jb) == 0)
-        ret = call_on_stack(PROG_CODE + entry, PROG_STACK_TOP, argc, argv);
+        ret = call_on_stack(entry_addr, PROG_STACK_TOP, argc, argv);
     else
         ret = prog_exit_code;
     prog_running = 0;
     abort_requested = 0;
+
+    /* undo whatever the program left behind */
+    fs_close_all();
+    sb_stop();
+    kbd_set_raw(0);
+    if (vga_is_graphics()) vga_set_text();
     con_setcolor(7, 0);
     return ret;
 }
 
+int run_program(u32 entry, int argc, char **argv)
+{
+    prog_lo = PROG_CODE;
+    prog_hi = PROG_CODE + PROG_CODE_MAX;
+    return run_at(PROG_CODE + entry, argc, argv);
+}
+
+static int run_native(const char *name, int idx, u32 size, int argc, char **argv)
+{
+    struct nxn_header *h = (struct nxn_header *)PROG_CODE;
+    if (size < sizeof(*h) || size > NATIVE_MAX) {
+        kprintf("%s: bad native executable size\n", name);
+        return -1;
+    }
+    if (fs_read_at(idx, 0, (void *)PROG_CODE, size) != (int)size) {
+        kprintf("%s: read error\n", name);
+        return -1;
+    }
+    if (h->image_size != size || h->image_size + h->bss_size > NATIVE_MAX ||
+        h->entry < PROG_CODE + sizeof(*h) || h->entry >= PROG_CODE + h->image_size) {
+        kprintf("%s: corrupt native executable\n", name);
+        return -1;
+    }
+    memset((void *)(PROG_CODE + h->image_size), 0, h->bss_size);
+    prog_lo = PROG_CODE;
+    prog_hi = PROG_CODE + h->image_size;
+    return run_at(h->entry, argc, argv);
+}
+
 int run_nxe_file(const char *name, int argc, char **argv)
 {
+    int idx = fs_find(name);
+    const struct fs_dirent *e = fs_entry(idx);
+    u32 magic = 0;
+    if (!e || fs_read_at(idx, 0, &magic, 4) != 4) {
+        kprintf("%s: cannot read file\n", name);
+        return -1;
+    }
+    if (magic == NXN_MAGIC)
+        return run_native(name, idx, e->size, argc, argv);
+
     u32 size;
     char *img = fs_read_alloc(name, &size);
     if (!img) {

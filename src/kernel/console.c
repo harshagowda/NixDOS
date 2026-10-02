@@ -1,14 +1,22 @@
 /* NixDOS 2 - VGA text-mode console (80x25), mirrored to the serial port */
 #include "kernel.h"
 
-#define VGA ((volatile u16 *)0xB8000)
+#define VGA_HW ((volatile u16 *)0xB8000)
+
+static volatile u16 *VGA = VGA_HW;    /* or a shadow buffer while in graphics mode */
 
 static int cx, cy;
 static u8 attr = 0x07;
 static int mirror = 1;
 
+void con_set_buffer(u16 *buf)
+{
+    VGA = buf ? buf : VGA_HW;
+}
+
 static void update_cursor(void)
 {
+    if (VGA != VGA_HW) return;
     u16 pos = (u16)(cy * CON_W + cx);
     outb(0x3D4, 0x0F);
     outb(0x3D5, (u8)(pos & 0xFF));

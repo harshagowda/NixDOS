@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -55,10 +56,13 @@ def build_test_image(base_image):
     for d in (os.path.join(ROOT, 'src', 'programs'), os.path.join(HERE, 'c')):
         for f in os.listdir(d):
             shutil.copy(os.path.join(d, f), progs)
+    native = os.path.join(ROOT, 'build', 'native', 'hello_native.nxe')
+    if os.path.exists(native):
+        shutil.copy(native, progs)
     out = os.path.join(tmp, 'test.img')
     subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'mkimage.py'),
                     os.path.join(ROOT, 'build', 'boot.bin'),
-                    os.path.join(ROOT, 'build', 'kernel.bin'), progs, out],
+                    os.path.join(ROOT, 'build', 'kernel.bin'), out, progs],
                    check=True, stdout=subprocess.DEVNULL)
     return tmp, out
 
@@ -70,6 +74,7 @@ def test_boot(vm):
     check('banner', 'WELCOME TO NIXDOS' in out, out[:500])
     check('A20 and protected mode', 'A20 enabled' in out)
     check('disk detected', 'disk: QEMU HARDDISK' in out, out)
+    check('no format on boot', 'formatting' not in out, out)
     check('ver', 'NixDOS 2.0' in vm.run('ver'))
     check('help lists cc', 'Compile C' in vm.run('help'))
     check('unknown command', 'Erroneous command' in vm.run('frobnicate'))
@@ -199,6 +204,73 @@ def test_misc(vm):
     check('uptime', vm.run('uptime').startswith('up '))
 
 
+def test_native(vm):
+    print('native programs (GCC + NixDOS libc)')
+    out = vm.run('hello_native x')
+    check('native program runs with argv', 'native hello, argc=2' in out, out)
+    check('native malloc/realloc', 'realloc ok: 7' in out, out)
+    check('native 64-bit math', '1234567890123 / 7 = 176366841446 rem 1' in out, out)
+    check('native x87 floating point', 'sqrt(2)=1.41421' in out and 'pow(2,10)=1024' in out, out)
+    check('native stdio files + lseek', 'read: line 2' in out and 'lseek/read: 1' in out, out)
+    check('native exit code', '[exit code 3]' in out, out)
+
+
+def test_wolf3d(base_image):
+    """Wolfenstein 3-D (Wolf4SDL port) with generated placeholder data."""
+    print('wolfenstein 3-d (placeholder data, sound blaster 16)')
+    data_dir = os.path.join(ROOT, 'build', 'wolf3d-testdata')
+    exe = os.path.join(ROOT, 'build', 'wolf3d', 'wolf3d.nxe')
+    if not os.path.exists(exe) or not os.path.exists(os.path.join(data_dir, 'vswap.wl1')):
+        check('wolf3d build + test data present (make && make wolf3d-testdata)', False)
+        return
+    tmp = tempfile.mkdtemp(prefix='nixdos-wolf-')
+    img = os.path.join(tmp, 'wolf.img')
+    subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'mkimage.py'),
+                    os.path.join(ROOT, 'build', 'boot.bin'), os.path.join(ROOT, 'build', 'kernel.bin'),
+                    img, exe, data_dir], check=True, stdout=subprocess.DEVNULL)
+    wav = os.path.join(tmp, 'audio.wav')
+    vm = NixDOS(img, extra_args=['-audiodev', 'wav,id=snd0,path=' + wav, '-device', 'sb16,audiodev=snd0'])
+    try:
+        vm.boot()
+        check('sound blaster detected', 'Sound Blaster 16' in vm.output(), vm.output())
+        start = len(vm.output())
+        vm.send_raw('wolf3d --tedlevel 0 --nowait\r')
+        time.sleep(8)
+        w, h, px = vm.screen()
+        check('game switches to VGA 320x200 graphics', (w, h) == (640, 400) or (w, h) == (320, 200), '%dx%d' % (w, h))
+        # status bar: the face sprite sits in the middle of the bottom bar
+        colours = set(px[i:i + 3] for i in range(0, len(px), 3 * 97))
+        check('game renders a frame', len(colours) > 8, 'colours: %d' % len(colours))
+        before = px
+        vm.key('up', 800)
+        time.sleep(1.5)
+        _, _, after = vm.screen()
+        check('PS/2 keyboard moves the player', before != after)
+        for _ in range(3):
+            vm.key('ctrl', 200)
+            time.sleep(0.6)
+        vm.key('f10')
+        time.sleep(1.5)
+        vm.key('y')
+        idx = vm.wait_for('$] ', 30, start + 10)
+        w, h, _ = vm.screen()
+        check('quit returns to the text-mode shell', (w, h) == (720, 400), '%dx%d' % (w, h))
+        check('shell works after the game', 'NixDOS 2.0' in vm.run('ver'))
+        check('config file written', 'config.wl1' in vm.run('ls'))
+    finally:
+        vm.close()
+    try:
+        import wave
+        wf = wave.open(wav)
+        frames = wf.readframes(wf.getnframes())
+        loud = sum(1 for i in range(0, len(frames) - 1, 64)
+                   if abs(int.from_bytes(frames[i:i + 2], 'little', signed=True)) > 200)
+        check('audio reaches the sound card', loud > 100, 'non-silent samples: %d' % loud)
+    except Exception as e:
+        check('audio reaches the sound card', False, str(e))
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_persistence(image):
     print('persistence across reboot')
     vm = NixDOS(image, keep_image=True)
@@ -225,7 +297,7 @@ def main():
     tmp, test_image = build_test_image(image)
     vm = NixDOS(test_image)
     try:
-        for t in (test_boot, test_compiler, test_samples, test_files, test_misc):
+        for t in (test_boot, test_compiler, test_samples, test_files, test_misc, test_native):
             try:
                 t(vm)
             except Exception:
@@ -234,11 +306,12 @@ def main():
                 print(vm.output()[-2000:])
     finally:
         vm.close()
-    try:
-        test_persistence(test_image)
-    except Exception:
-        failed.append('test_persistence')
-        traceback.print_exc()
+    for t, arg in ((test_persistence, test_image), (test_wolf3d, image)):
+        try:
+            t(arg)
+        except Exception:
+            failed.append(t.__name__)
+            traceback.print_exc()
     shutil.rmtree(tmp, ignore_errors=True)
 
     print('\n%d passed, %d failed' % (passed, len(failed)))

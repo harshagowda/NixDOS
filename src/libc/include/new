@@ -1,0 +1,7 @@
+// minimal <new> for NixDOS
+#ifndef _NIX_NEW
+#define _NIX_NEW
+#include <stddef.h>
+inline void *operator new(size_t, void *p) noexcept { return p; }
+inline void *operator new[](size_t, void *p) noexcept { return p; }
+#endif

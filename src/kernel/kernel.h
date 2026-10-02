@@ -25,6 +25,7 @@ typedef unsigned int       size_t;
  *   0x00090000  kernel stack top (grows down)
  *   0x000B8000  VGA text buffer
  *   0x00100000  kernel heap (above 1 MiB - needs A20)
+ *   0x003E0000  Sound Blaster DMA ring buffer (16 KiB)
  *   0x00400000  user program code
  *   0x00480000  user program data (globals, string literals)
  *   0x00800000  user program stack top (grows down)
@@ -32,14 +33,16 @@ typedef unsigned int       size_t;
  * ------------------------------------------------------------------------- */
 #define API_PTR_ADDR    0x00000500u
 #define KHEAP_START     0x00100000u
-#define KHEAP_END       0x00400000u
+#define KHEAP_END       0x003E0000u
+#define SB_DMA_BUF      0x003E0000u   /* 128 KiB aligned, below 16 MiB, for ISA DMA */
+#define SB_DMA_SIZE     0x00004000u
 #define PROG_CODE       0x00400000u
 #define PROG_CODE_MAX   0x00080000u
 #define PROG_DATA       0x00480000u
 #define PROG_DATA_MAX   0x00080000u
 #define PROG_STACK_TOP  0x00800000u
 #define PROG_HEAP_START 0x00800000u
-#define PROG_HEAP_LIMIT 0x02000000u
+#define PROG_HEAP_LIMIT 0x10000000u
 
 /* ---- port I/O ------------------------------------------------------------ */
 static inline void outb(u16 port, u8 v)  { __asm__ volatile("outb %0, %1" : : "a"(v), "Nd"(port)); }
@@ -96,6 +99,23 @@ int  con_gety(void);
 void con_putat(int x, int y, char c, u8 attr);
 void con_set_mirror(int on);
 void con_show_cursor(int on);
+void con_set_buffer(u16 *buf);   /* NULL = VGA text memory */
+
+/* ---- sb16.c -------------------------------------------------------------- */
+int  sb_init(void);
+int  sb_present(void);
+int  sb_version(void);
+int  sb_start(u32 rate);         /* -> bytes per half buffer, or -1 */
+void sb_stop(void);
+u32  sb_halves_done(void);
+
+/* ---- vga.c --------------------------------------------------------------- */
+int  vga_is_graphics(void);
+void vga_set_graphics(void);     /* 320x200, 256 colours, framebuffer at 0xA0000 */
+void vga_set_text(void);
+void vga_set_palette(const u8 *rgb, int first, int count);
+void vga_wait_vsync(void);
+void vga_blit(const u8 *frame);
 
 /* ---- serial.c ------------------------------------------------------------ */
 int  serial_init(void);
@@ -115,7 +135,7 @@ void irq_install(int irq, irq_handler_t h);
 void irq_unmask(int irq);
 
 /* ---- timer.c ------------------------------------------------------------- */
-#define TIMER_HZ 100
+#define TIMER_HZ 1000
 void timer_init(void);
 u32  timer_ticks(void);
 u32  timer_ms(void);
@@ -139,6 +159,8 @@ int  kbd_haskey(void);
 int  kbd_getkey(void);           /* blocking */
 int  kbd_trygetkey(void);        /* -1 if none */
 int  readline(char *buf, int max, char **history, int nhistory);
+void kbd_set_raw(int on);        /* raw mode: also queue PS/2 scancodes */
+int  kbd_get_scancode(void);     /* -1 if none */
 
 /* ---- rtc.c --------------------------------------------------------------- */
 struct rtc_time { int sec, min, hour, day, month, year; };
@@ -168,21 +190,25 @@ const char *ata_model(void);
 int ata_read(u32 lba, u32 count, void *buf);
 int ata_write(u32 lba, u32 count, const void *buf);
 
-/* ---- fs.c (NXFS) --------------------------------------------------------- */
+/* ---- fs.c (NXFS v2) ------------------------------------------------------ */
 #define FS_NAME_MAX   40
-#define FS_MAX_FILES  96
-#define FS_MAX_SIZE   (128 * 512)
+#define FS_MAX_FILES  128
+#define FS_MAX_SIZE   (64 * 1024)   /* limit for the editor and NixC executables */
 struct fs_dirent {
     char name[FS_NAME_MAX];
     u32  size;
     u32  flags;
     u32  mtime;
-    u32  reserved[3];
+    u32  start;                     /* first sector, relative to the data area */
+    u32  alloc;                     /* sectors reserved for the file */
+    u32  reserved;
 };
 void fs_init(void);
 int  fs_on_disk(void);
 int  fs_format(void);
+u32  fs_free_bytes(void);
 int  fs_find(const char *name);
+int  fs_read_at(int index, u32 off, void *buf, u32 len);
 int  fs_read(const char *name, void *buf, u32 max);   /* -> bytes or -1 */
 char *fs_read_alloc(const char *name, u32 *size);     /* NUL terminated, kfree() it */
 int  fs_write(const char *name, const void *data, u32 len);
@@ -191,10 +217,20 @@ int  fs_rename(const char *from, const char *to);
 const struct fs_dirent *fs_entry(int i);              /* NULL if slot unused */
 int  fs_count(void);
 int  fs_valid_name(const char *name);
+int  fs_open(const char *name, int flags);            /* Linux O_* flag values */
+int  fs_hread(int h, void *buf, u32 len);
+int  fs_hwrite(int h, const void *buf, u32 len);
+int  fs_hseek(int h, int off, int whence);
+int  fs_hclose(int h);
+void fs_close_all(void);
 
 /* ---- program.c (user programs + API) ------------------------------------- */
-#define NXE_MAGIC 0x3145584E /* "NXE1" */
+#define NXE_MAGIC 0x3145584E /* "NXE1": NixC executable */
+#define NXN_MAGIC 0x314E584E /* "NXN1": native executable built with GCC (see src/libc) */
 struct nxe_header { u32 magic, entry, code_size, data_size; };
+/* A native image is linked at PROG_CODE and starts with this header. */
+struct nxn_header { u32 magic, entry, image_size, bss_size; };
+#define NATIVE_MAX  (PROG_STACK_TOP - PROG_CODE - 0x80000)   /* image + bss, 512 KiB stack */
 extern volatile int prog_running;
 extern volatile int abort_requested;
 void prog_init(void);

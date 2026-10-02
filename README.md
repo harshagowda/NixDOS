@@ -14,11 +14,12 @@ Linux toolchain and keeps the original commands (`vers`, `ctime`, `cdate`, `ccol
 
 ## NixDOS 2.0 quick start
 
-Requirements: `gcc` (with `-m32` support), `binutils`, `nasm`, `python3`, `qemu-system-i386`.
+Requirements: `gcc`/`g++` (with `-m32` support), `binutils`, `nasm`, `python3`, `qemu-system-i386`.
 
 ```bash
 make              # builds build/nixdos2.img (8 MiB bootable hard-disk image)
 make run          # boots it in QEMU (VGA window, console also mirrored to this terminal)
+make WOLF_TESTDATA=1 run   # same, with placeholder Wolfenstein 3-D data installed
 make run-serial   # boots without a window; use the OS from this terminal
 make test         # automated end-to-end tests in QEMU
 ```
@@ -46,7 +47,7 @@ and you are returned to the shell. Files are saved to the disk and survive reboo
 | Kernel core | `entry.asm`, `kernel.c`, `idt.c` | Entry, interrupt table, 8259 PIC, CPU exception handling |
 | Drivers | `console.c`, `serial.c`, `keyboard.c`, `timer.c`, `rtc.c`, `ata.c` | VGA text mode, COM1 serial console, PS/2 keyboard, PIT timer + PC speaker, CMOS clock, ATA hard disk (PIO) |
 | Memory | `mem.c` | Memory size detection, heap allocator above 1 MiB |
-| File system | `fs.c` | **NXFS**: 96 files of up to 64 KiB each, stored on the boot disk |
+| File system | `fs.c` | **NXFS v2**: up to 128 files of any size (each stored contiguously) on the boot disk |
 | Shell | `shell.c` | Commands, history (Up/Down), line editing, `echo > file` |
 | Editor | `editor.c` | NixEdit full-screen text editor with auto-indent |
 | Compiler | `cc.c`, `api.h` | **NixC**, a one-pass C compiler that generates x86 machine code |
@@ -61,7 +62,8 @@ and you are returned to the shell. Files are saved to the disk and survive reboo
 0x00010000  kernel (loaded by the boot sector)
 0x00090000  kernel stack top
 0x000B8000  VGA text memory
-0x00100000  kernel heap (3 MiB)          <- above 1 MiB: needs A20
+0x00100000  kernel heap (~3 MiB)         <- above 1 MiB: needs A20
+0x003E0000  Sound Blaster DMA buffer
 0x00400000  user program code (512 KiB)
 0x00480000  user program data (512 KiB)
 0x00800000  user program stack top / start of the program heap (malloc)
@@ -73,8 +75,8 @@ and you are returned to the shell. Files are saved to the disk and survive reboo
 LBA 0          boot sector
 LBA 1..1023    kernel
 LBA 1024       NXFS superblock
-LBA 1025-1040  directory (64-byte entries)
-LBA 1041..     file data, one 64 KiB slot per file
+LBA 1025-1040  directory (128 x 64-byte entries)
+LBA 1041..     file data, one contiguous extent per file
 ```
 
 ### NixC - the built-in C compiler
@@ -123,6 +125,49 @@ as long as new library functions are only ever added to the end of the list in `
 Sample programs (`src/programs/`): `hello.c`, `primes.c`, `fib.c`, `sort.c`, `strings.c`, `files.c`,
 `queens.c`, `mandel.c`, `calc.c`, `guess.c`, `snake.c`.
 
+### Native programs (GCC) and Wolfenstein 3-D
+
+Besides NixC, NixDOS runs programs compiled on the build machine with GCC against its own small C
+library (`src/libc`: stdio, stdlib, string, math with the x87 FPU, POSIX-style `open`/`read`/`lseek`,
+a heap allocator, C++ `new`/`delete`, static constructors). The executables are flat images
+(`NXN1` header) loaded at 0x400000. You can have up to 3.5 MiB of code and data and a 512 KiB stack,
+and the heap uses the rest of RAM. Put a `.c` file in `src/native/` and `make` installs it
+(see `hello_native.c`).
+
+**Wolfenstein 3-D** runs as a native program. It is **Wolf4SDL** (the 32-bit port of id Software's
+GPL-licensed source, `ports/wolf3d/src`), built against a small SDL2/SDL_mixer replacement
+(`ports/sdl`):
+
+| Piece | Where |
+|---|---|
+| 320x200x256 graphics (VGA mode 13h, programmed directly; the text font, palette and screen are saved and restored) | `src/kernel/vga.c` |
+| Raw key-up/key-down scancodes for the game | `src/kernel/keyboard.c` |
+| Sound Blaster 16 driver (16-bit stereo, auto-init DMA, IRQ 5) | `src/kernel/sb16.c` |
+| Mixer for AdLib music (OPL emulation), digitised sound effects and PC speaker sounds; it works silently without a sound card | `ports/sdl/sdl_mixer.c` |
+| Large files (NXFS v2 extents) and file handles | `src/kernel/fs.c` |
+| x87 FPU enabled, 1 kHz timer | `src/kernel/kernel.c`, `timer.c` |
+| NixDOS patches to Wolf4SDL (marked `NIXDOS`) | `version.h`, `id_vl.cpp`, `wl_menu.cpp` |
+
+The game data is copyrighted by id Software, so it is not included. To play:
+
+```bash
+cp /path/to/shareware/*.WL1 ports/wolf3d/data/     # Wolfenstein 3-D shareware v1.4
+make run                                           # in NixDOS type:  wolf3d
+```
+
+For the registered v1.4 Apogee data, copy the `.WL6` files instead and build with `make WOLF_DATA=wl6`.
+For sound, add a Sound Blaster 16 to QEMU: `-audiodev pa,id=s -device sb16,audiodev=s`
+(use `alsa` or `sdl` in place of `pa` depending on your system).
+Controls are the original ones: arrow keys, Ctrl fires, Alt strafes, Shift runs, Space opens doors,
+Esc opens the menu, and F10 quits.
+
+Without the real data you can still try the engine: `make WOLF_TESTDATA=1 run` generates valid Wolf3D
+data files with placeholder art and test levels (`ports/wolf3d/tools/testdata.cpp`).
+`make test` uses that data to check the graphics, keyboard, audio and exit back to the shell.
+
+License note: `ports/wolf3d/` is GPLv2 (see the license files there), so an image that includes
+`wolf3d.nxe` must be distributed under the GPL terms. The rest of NixDOS keeps its own license.
+
 ### Tests
 
 `make test` boots a copy of the image in QEMU and checks the shell, file system, editor, crash handling,
@@ -135,7 +180,8 @@ with the host GCC, and the two outputs must be identical.
   stick, not a floppy. It has no partition table, which some real BIOSes need before they will boot a USB stick.
 - Programs run in ring 0 without memory protection. A program cannot crash the OS through divide errors
   or similar faults, but a bad pointer can still overwrite kernel memory.
-- One program at a time (no multitasking). At least 9 MiB of RAM is needed to run programs (QEMU: `-m 32`).
+- One program at a time (no multitasking). At least 9 MiB of RAM is needed to run programs (QEMU: `-m 64`).
+- No mouse or joystick support yet (Wolf3D is played with the keyboard).
 
 ---
 

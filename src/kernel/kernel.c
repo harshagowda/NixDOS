@@ -40,6 +40,16 @@ void sys_shutdown(void)
     for (;;) hlt();
 }
 
+static void fpu_init(void)
+{
+    u32 cr0;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 &= ~(1u << 2);              /* EM: no emulation */
+    cr0 |= (1u << 1) | (1u << 5);   /* MP, NE: native x87 error reporting */
+    __asm__ volatile("mov %0, %%cr0" : : "r"(cr0));
+    __asm__ volatile("fninit");
+}
+
 static void banner(void)
 {
     con_setcolor(15, 1);
@@ -55,6 +65,7 @@ void kmain(u32 drive)
     boot_drive = drive;
 
     con_init();
+    fpu_init();
     idt_init();
     mem_init();
     serial_init();
@@ -72,6 +83,8 @@ void kmain(u32 drive)
         kprintf("[ ok ] disk: %s (%d MiB)\n", ata_model(), ata_sectors() / 2048);
     else
         kprintf("[warn] no ATA disk found, files are kept in RAM only\n");
+    if (sb_init())
+        kprintf("[ ok ] sound: Sound Blaster 16 (DSP %d.%02d)\n", sb_version() >> 8, sb_version() & 0xFF);
     fs_init();
     kprintf("[ ok ] file system: %d file(s)%s\n", fs_count(), fs_on_disk() ? "" : " (RAM)");
     prog_init();

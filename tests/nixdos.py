@@ -4,6 +4,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import socket
+import struct
 import threading
 import time
 
@@ -12,16 +14,19 @@ PROMPT = '$] '
 
 
 class NixDOS:
-    def __init__(self, image, memory=32, keep_image=False):
+    def __init__(self, image, memory=64, keep_image=False, extra_args=()):
         self.tmpdir = tempfile.mkdtemp(prefix='nixdos-')
         self.image = image if keep_image else os.path.join(self.tmpdir, 'disk.img')
         if not keep_image:
             shutil.copy(image, self.image)
+        self.monitor_path = os.path.join(self.tmpdir, 'monitor.sock')
         self.proc = subprocess.Popen(
             ['qemu-system-i386', '-m', str(memory), '-display', 'none',
              '-drive', 'file=%s,format=raw,if=ide' % self.image,
-             '-serial', 'stdio', '-no-reboot'],
+             '-serial', 'stdio', '-no-reboot',
+             '-monitor', 'unix:%s,server,nowait' % self.monitor_path] + list(extra_args),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.mon = None
         self.buf = ''
         self.lock = threading.Lock()
         self.reader = threading.Thread(target=self._read, daemon=True)
@@ -74,7 +79,49 @@ class NixDOS:
         end = self.wait_for('\n' + PROMPT, timeout, begin)
         return self.output()[begin:end].strip('\n')
 
+    # ---- QEMU monitor: real PS/2 key presses and screenshots ------------------
+    def monitor(self, command, wait=0.15):
+        if self.mon is None:
+            for _ in range(50):
+                if os.path.exists(self.monitor_path):
+                    break
+                time.sleep(0.1)
+            self.mon = socket.socket(socket.AF_UNIX)
+            self.mon.connect(self.monitor_path)
+            self.mon.settimeout(0.2)
+        self.mon.send((command + '\n').encode())
+        time.sleep(wait)
+        try:
+            while self.mon.recv(65536):
+                pass
+        except OSError:
+            pass
+
+    def key(self, name, hold_ms=None):
+        self.monitor('sendkey %s%s' % (name, ' %d' % hold_ms if hold_ms else ''))
+
+    def screen(self):
+        """Return (width, height, rgb bytes) of the current display."""
+        path = os.path.join(self.tmpdir, 'screen.ppm')
+        if os.path.exists(path):
+            os.remove(path)
+        self.monitor('screendump ' + path, 0.5)
+        for _ in range(20):
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                break
+            time.sleep(0.1)
+        data = open(path, 'rb').read()
+        parts = data.split(b'\n', 3)
+        w, h = map(int, parts[1].split())
+        return w, h, parts[3]
+
     def close(self):
+        if self.proc.poll() is None and self.mon is not None:
+            try:                        # a clean exit lets QEMU finish files (e.g. WAV)
+                self.monitor('quit')
+                self.proc.wait(timeout=10)
+            except Exception:
+                pass
         if self.proc.poll() is None:
             self.proc.kill()
             self.proc.wait()

@@ -54,6 +54,25 @@
     API(wherey,    api_wherey,    0, TY_INT) \
     API(beep,      api_beep,      2, TY_VOID) \
     API(readfile,  api_readfile,  3, TY_INT) \
-    API(writefile, api_writefile, 3, TY_INT)
+    API(writefile, api_writefile, 3, TY_INT) \
+    API(open,      api_open,      2, TY_INT) \
+    API(close,     api_close,     1, TY_INT) \
+    API(read,      api_read,      3, TY_INT) \
+    API(write,     api_write,     3, TY_INT) \
+    API(lseek,     api_lseek,     3, TY_INT) \
+    API(unlink,    api_unlink,    1, TY_INT) \
+    API(filesize,  api_filesize,  1, TY_INT) \
+    API(vgamode,   api_vgamode,   1, TY_INT) \
+    API(vgapalette, api_vgapalette, 3, TY_VOID) \
+    API(vgablit,   api_vgablit,   1, TY_VOID) \
+    API(vgawait,   api_vgawait,   0, TY_VOID) \
+    API(kbdraw,    api_kbdraw,    1, TY_VOID) \
+    API(scancode,  api_scancode,  0, TY_INT) \
+    API(heapinfo,  api_heapinfo,  2, TY_VOID) \
+    API(conwrite,  api_conwrite,  2, TY_VOID) \
+    API(audioopen, api_audioopen, 1, TY_INT) \
+    API(audioclose, api_audioclose, 0, TY_VOID) \
+    API(audiohalves, api_audiohalves, 0, TY_INT) \
+    API(audiobuffer, api_audiobuffer, 0, TY_INT)
 
 #endif

@@ -7,6 +7,26 @@ static volatile int kbuf[KBUF];
 static volatile u32 khead, ktail;
 static int shift, ctrl, alt, caps, extended;
 
+/* raw scancode queue for programs that want key-up/key-down events */
+static volatile u8 rawbuf[KBUF];
+static volatile u32 rhead, rtail;
+static int raw_mode;
+
+void kbd_set_raw(int on)
+{
+    raw_mode = on;
+    rhead = rtail = 0;
+    if (!on) khead = ktail = 0;     /* drop keys typed while the program ran */
+}
+
+int kbd_get_scancode(void)
+{
+    if (rhead == rtail) return -1;
+    int sc = rawbuf[rtail];
+    rtail = (rtail + 1) % KBUF;
+    return sc;
+}
+
 static const char map_normal[128] = {
     0, 27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
     '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n',
@@ -36,6 +56,11 @@ void kbd_push(int key)
 static void kbd_irq(struct regs *r)
 {
     u8 sc = inb(0x60);
+
+    if (raw_mode) {
+        u32 next = (rhead + 1) % KBUF;
+        if (next != rtail) { rawbuf[rhead] = sc; rhead = next; }
+    }
 
     if (sc == 0xE0) { extended = 1; return; }
 

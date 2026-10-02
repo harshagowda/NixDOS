@@ -242,6 +242,7 @@ static void cmd_equip(int argc, char **argv)
         kprintf("  Hard disk   : none\n");
     kprintf("  Floppy      : %d drive(s)\n", (equip & 1) ? ((equip >> 6) & 3) + 1 : 0);
     kprintf("  Serial ports: %d   Parallel ports: %d\n", (equip >> 9) & 7, (equip >> 14) & 3);
+    kprintf("  Sound       : %s\n", sb_present() ? "Sound Blaster 16" : "PC speaker only");
     kprintf("  Video       : %s\n", ((equip >> 4) & 3) == 3 ? "monochrome" : "colour (VGA text 80x25)");
     kprintf("  Boot drive  : 0x%x\n", boot_drive);
 }
@@ -283,8 +284,10 @@ static void cmd_ls(int argc, char **argv)
         n++;
         total += e->size;
     }
-    kprintf("  %d file(s), %d bytes, %d free slot(s)%s\n", n, total, FS_MAX_FILES - n,
-            fs_on_disk() ? "" : "  [RAM only - no disk]");
+    if (fs_on_disk())
+        kprintf("  %d file(s), %d bytes, %d KiB free\n", n, total, fs_free_bytes() / 1024);
+    else
+        kprintf("  %d file(s), %d bytes  [RAM only - no disk]\n", n, total);
 }
 
 static void cmd_cat(int argc, char **argv)
